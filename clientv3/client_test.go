@@ -25,16 +25,20 @@ import (
 	"github.com/coreos/etcd/pkg/testutil"
 )
 
+
+//xu: c.Close() -> c.Get cancel
 func TestDialCancel(t *testing.T) {
 	defer testutil.AfterTest(t)
 
 	// accept first connection so client is created with dial timeout
+	//xu：构造服务端
 	ln, err := net.Listen("unix", "dialcancel:12345")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
 
+	//xu:客户端请求连接
 	ep := "unix://dialcancel:12345"
 	cfg := Config{
 		Endpoints:   []string{ep},
@@ -45,6 +49,7 @@ func TestDialCancel(t *testing.T) {
 	}
 
 	// connect to ipv4 black hole so dial blocks
+	//xu:实测没起到作用？？？？
 	c.SetEndpoints("http://254.0.0.1:12345")
 
 	// issue Get to force redial attempts
@@ -54,6 +59,7 @@ func TestDialCancel(t *testing.T) {
 		// Get may hang forever on grpc's Stream.Header() if its
 		// context is never canceled.
 		c.Get(c.Ctx(), "abc")
+		fmt.Println("Get end", c.Ctx().Err(), time.Now())
 	}()
 
 	// wait a little bit so client close is after dial starts
@@ -63,17 +69,20 @@ func TestDialCancel(t *testing.T) {
 	go func() {
 		defer close(donec)
 		c.Close()
+		fmt.Println("Close end", time.Now())
 	}()
 
 	select {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("failed to close")
 	case <-donec:
+		fmt.Println("done done", time.Now())
 	}
 	select {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("get failed to exit")
 	case <-getc:
+		fmt.Println("get done", time.Now())
 	}
 }
 
@@ -106,6 +115,7 @@ func TestDialTimeout(t *testing.T) {
 
 		time.Sleep(10 * time.Millisecond)
 
+		//xu:上面等待10ms，还未到cfg里的超时时间，这里执行default
 		select {
 		case err := <-donec:
 			t.Errorf("#%d: dial didn't wait (%v)", i, err)
@@ -123,6 +133,7 @@ func TestDialTimeout(t *testing.T) {
 	}
 }
 
+//xu：为什么能连接上？
 func TestDialNoTimeout(t *testing.T) {
 	cfg := Config{Endpoints: []string{"127.0.0.1:12345"}}
 	c, err := New(cfg)
@@ -132,6 +143,12 @@ func TestDialNoTimeout(t *testing.T) {
 	c.Close()
 }
 
+
+//xu:判断原则：
+//1、ctx存在，且有错误-> halt
+//2、err 为 nil -> not halt
+//3、err 类型是否为 unavialable或者inter。 都不是->halt ; 其中之一 -> not halt.
+//4、特殊说明，非status类型的，一定不符合3。所以是halt
 func TestIsHaltErr(t *testing.T) {
 	if !isHaltErr(nil, fmt.Errorf("etcdserver: some etcdserver error")) {
 		t.Errorf(`error prefixed with "etcdserver: " should be Halted by default`)
